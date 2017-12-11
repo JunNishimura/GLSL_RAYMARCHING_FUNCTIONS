@@ -95,6 +95,7 @@ float sphereSDF(vec3 samplePoint, float sphereSize) {
     return length(samplePoint) - sphereSize;
 }
 
+
 // distance function of cube
 float cubeSDF(vec3 p, vec3 cubeSize) {
     // 各点の絶対値からcubeの大きさをひく（cubeの大きさは実際にはcubeSizeの二倍になる）
@@ -104,6 +105,21 @@ float cubeSDF(vec3 p, vec3 cubeSize) {
     float outsideDistance = length(max(d, 0.0));
     return insideDistance + outsideDistance;
 }
+
+// round cube
+// 基本上のcubeと同じで、角を丸めるために変数roundを用意して、最終結果でround分を引く
+float cubeSDF_round(vec3 p, vec3 cubeSize) {
+    // round : どれだけ丸みを帯びさせるか // この値だけ外側に膨らませる(その分オブジェクトが大きくなる)
+    float round = 0.1;
+    vec3 d = abs(p) - cubeSize;
+    float insideDistance = min(max(d.x, max(d.y, d.z)), 0.0);
+    float outsideDistance = length(max(d, 0.0));
+    return (insideDistance + outsideDistance) - round;
+}
+
+
+
+
 
 // distance function of cylinder
 // h : height
@@ -122,41 +138,28 @@ float cylinderSDF( vec3 p, float h, float r) {
 }
 
 
+// distance function of eacy clinder
+// 両端が切れないcylinder
+// 操作性低い
+float easyCylinderSDF (vec3 p) {
+    // 0にセットすると原点からの距離を測れる
+    vec2 c = vec2(0.0, 0.0);
+    // radius
+    float radius = 0.5;
+    // ここでpのxyzの中の２つだけしか使わないことで両端が切れないcylinderを描ける
+    // 単純に原点からの距離を測ってradiusで引く。その値が限りなく0に近い値であれば、そこが表面
+    return length(p.yz - c.xy) - radius;
+}
+
+float coneSDF(vec3 p) {
+    
+}
+
+
 
 // この関数をdistance_functionのハブとしておくことで、複数オブジェクトを描いたり、重ねて描いたりすることを容易にする。
 float sceneSDF(vec3 samplePoint) {
     
-//    float sphereDist = sphereSDF(samplePoint/1.2, 1.0) * 1.2;
-//    // cubeのsamplePointにvec3(0.0, 1.0, 0.0)を加えると、下に1.0だけズレる。
-//    // 描かれるのは常に0付近の値と考えれば、追加前のy軸に対して-1.0だったところに1.0追加されると-1.0+1.0で0.0になるから、cubeが1.0分下にズレる
-//    float cubeDist = cubeSDF(samplePoint + vec3(0.0, sin(radians(90)), 0.0), vec3(1.0));
-    
-    samplePoint = rotateY(u_time/2.0) * samplePoint;
-    // make some cylinders
-    float cylinderRadius = 0.4 + (1.0 - 0.4) * (1.0 + sin(u_time*1.7)) / 2.0;
-    float cylinder1 = cylinderSDF( samplePoint, 2.0, cylinderRadius );
-    float cylinder2 = cylinderSDF( rotateX(radians(90.0)) * samplePoint, 2.0, cylinderRadius );
-    float cylinder3 = cylinderSDF( rotateY(radians(90.0)) * samplePoint ,2.0, cylinderRadius );
-    
-    // make cube and sphere
-    float cube = cubeSDF(samplePoint, vec3(0.9, 0.9, 0.9));
-    float sphere = sphereSDF( samplePoint, 1.2 );
-    
-    // basic ball info
-    float ballOffset = 0.4 + 1.0 * sin( 1.7 * u_time );
-    float ballRadius = 0.3;
-    // make several balls and add some offset to each ball
-    float balls = sphereSDF( samplePoint + vec3(ballOffset, 0.0, 0.0), ballRadius);
-    balls = unionSDF(balls, sphereSDF( samplePoint + vec3(-ballOffset, 0.0, 0.0), ballRadius ));
-    balls = unionSDF(balls, sphereSDF( samplePoint + vec3(0.0, ballOffset, 0.0), ballRadius ));
-    balls = unionSDF(balls, sphereSDF( samplePoint + vec3(0.0, -ballOffset, 0.0), ballRadius ));
-    balls = unionSDF(balls, sphereSDF( samplePoint + vec3(0.0, 0.0, ballOffset), ballRadius ));
-    balls = unionSDF(balls, sphereSDF( samplePoint + vec3(0.0, 0.0, -ballOffset), ballRadius ));
-    
-    // make center objects
-    float csgNet = differenceSDF( intersectSDF(cube, sphere), unionSDF(cylinder1, unionSDF(cylinder2, cylinder3)) );
-    
-    return unionSDF(balls, csgNet);
 }
 
 // ここでレイを作る。
@@ -279,7 +282,8 @@ void main () {
     vec3 viewDir = rayDirection(45.0);
     // カメラの位置を決める
 //    vec3 eye = vec3(8.0, sin(u_time*0.2)*5.0, 7.0);
-    vec3 eye = vec3(8.0, 5.0, 7.0);
+//    vec3 eye = vec3(8.0, 5.0, 7.0);
+    vec3 eye = vec3(0.0, 0.0, 15.0);
     
     // viewMatrixを作る。ここでカメラ中心の座標にする(openGLの行列チュートリアル見ると分かりやすい)
     mat4 viewToWorld = viewMatrix(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
@@ -301,8 +305,8 @@ void main () {
     // 違いはvec3でそのオブジェクトの表面のベクトル情報を取っていること。
     vec3 surfPos = eye + dist * worldDir;
     
-    vec3 K_a = vec3(0.2, 0.2, 0.2);
-    vec3 K_d = vec3(0.7, 0.2, 0.2);
+    vec3 K_a = vec3(0.2, 0.7, 0.7);
+    vec3 K_d = vec3(0.2, 0.7, 0.7);
     vec3 K_s = vec3(1.0, 1.0, 1.0);
     float shininess = 10.0;
     
