@@ -87,6 +87,29 @@ float differenceSDF(float distA, float distB) {
     return max(distA, -distB);
 }
 
+// objectの重なり部分を補間する
+// objectの重なり部分はd1,d2とも０付近の値を返す.
+// exp(-k * d)の部分ではもしdが0に近いのであれば、1を返すので、1+1で2になる。
+// h=2周辺で（詳しく計算していない）いい感じの0付近の数になると予想している。
+// -log(h)/kで少しだけマイナス値で引くことでオブジェクトの重なり部分を膨らませている
+// あまり深く考えずにobjectの重なり部分だとhが0付近の数になりそれをマイナスで弾くことで重なり部分だけを上手い具合に膨らませることができると思っておけばよい
+float smoothMin(float d1, float d2, float k) {
+    float h = exp( -k * d1 ) + exp( -k * d2 );
+    return -log(h) / k;
+}
+
+
+
+
+
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// object function //
+
+
 // simple sphere
 // この関数が0.0を返せばsphereの表面。+ならoutside,-ならinside。
 // 1(sphereSize) = x^2 + y^2 + z^2 を x^2 + y^2 + z^2がlength()でそこから1を右辺に移動させ、=0で方程式が成り立つ場合にsphereを描く
@@ -117,10 +140,6 @@ float cubeSDF_round(vec3 p, vec3 cubeSize) {
     return (insideDistance + outsideDistance) - round;
 }
 
-
-
-
-
 // distance function of cylinder
 // h : height
 // r : radius
@@ -137,7 +156,6 @@ float cylinderSDF( vec3 p, float h, float r) {
     return insideDistance + outsideDistance;
 }
 
-
 // distance function of eacy clinder
 // 両端が切れないcylinder
 // 操作性低い
@@ -151,16 +169,26 @@ float easyCylinderSDF (vec3 p) {
     return length(p.yz - c.xy) - radius;
 }
 
-float coneSDF(vec3 p) {
-    
-}
-
-
-
 // この関数をdistance_functionのハブとしておくことで、複数オブジェクトを描いたり、重ねて描いたりすることを容易にする。
 float sceneSDF(vec3 samplePoint) {
+    float cylinderRadius = 0.3;
+    float cylinder1 = cylinderSDF( samplePoint, 2.0, cylinderRadius );
+    float cylinder2 = cylinderSDF( rotateX(radians(90.0)) * samplePoint, 2.0, cylinderRadius );
     
+    return smoothMin (cylinder1, cylinder2, abs(sin(u_time)*3.0+4.0));
+//    return unionSDF(sphere, box);
 }
+
+
+
+
+
+
+
+
+
+
+
 
 // ここでレイを作る。
 // xy方向は単に -u_resolution/2 ~ u_resolution/2 に座標変換したスクリーンのxyを入れる。
@@ -271,7 +299,7 @@ mat4 viewMatrix(vec3 eye, vec3 center, vec3 up) {
     );
 }
 
-
+s
 
 
 void main () {
@@ -282,8 +310,8 @@ void main () {
     vec3 viewDir = rayDirection(45.0);
     // カメラの位置を決める
 //    vec3 eye = vec3(8.0, sin(u_time*0.2)*5.0, 7.0);
-//    vec3 eye = vec3(8.0, 5.0, 7.0);
-    vec3 eye = vec3(0.0, 0.0, 15.0);
+    vec3 eye = vec3(8.0, 5.0, 7.0);
+//    vec3 eye = vec3(0.0, 0.0, 15.0);
     
     // viewMatrixを作る。ここでカメラ中心の座標にする(openGLの行列チュートリアル見ると分かりやすい)
     mat4 viewToWorld = viewMatrix(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
