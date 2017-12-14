@@ -79,6 +79,7 @@ float unionSDF(float distA, float distB) {
     return min(distA, distB);
 }
 
+
 // differenceSDFでは複数オブジェクトの差分を利用して描画する
 // max関数だから、両方のオブジェクトが小さい値のみ描画される。
 // -distBだから、符合が逆転して、もともとobjectとして描かれた所の値がプラスの大きな値を持って、もともとobjectの外側だった部分の値がマイナスの値を持つことになる。
@@ -96,6 +97,32 @@ float differenceSDF(float distA, float distB) {
 float smoothMin(float d1, float d2, float k) {
     float h = exp( -k * d1 ) + exp( -k * d2 );
     return -log(h) / k;
+}
+
+
+// sceneSDF2対応のオブジェクト結合関数たち
+
+// .wで距離だけを比べて、値が小さい方のベクトルを返す
+vec4 unionSDF2(vec4 d1, vec4 d2) {
+    return d1.w < d2.w ? d1 : d2;
+}
+
+// .wで距離だけを比べて、値が大きい方のベクトルを返す
+vec4 intersectSDF2(vec4 d1, vec4 d2) {
+    return d1.w > d2.w ? d1 : d2;
+}
+
+// .wで距離だけを比べて、値が大きい方のベクトルを返す
+vec4 differenceSDF2(vec4 d1, vec4 d2) {
+    return d1.w > -d2.w ? d1 : d2;
+}
+
+// 距離の部分だけsmoothMinを適用。何か他にもやり方あるような気もする
+vec4 unionWithSmoothSDF(vec4 d1, vec4 d2, float k) {
+    float smooth_d = smoothMin(d1.w, d2.w, k);
+    vec4 s = d1.w < d2.w ? d1 : d2;
+    s.w = smooth_d;
+    return s;
 }
 
 
@@ -169,20 +196,51 @@ float easyCylinderSDF (vec3 p) {
     return length(p.yz - c.xy) - radius;
 }
 
-// この関数をdistance_functionのハブとしておくことで、複数オブジェクトを描いたり、重ねて描いたりすることを容易にする。
-float sceneSDF(vec3 samplePoint) {
-    float cylinderRadius = 0.3;
-    float cylinder1 = cylinderSDF( samplePoint, 2.0, cylinderRadius );
-    float cylinder2 = cylinderSDF( rotateX(radians(90.0)) * samplePoint, 2.0, cylinderRadius );
-    
-    return smoothMin (cylinder1, cylinder2, abs(sin(u_time)*3.0+4.0));
-//    return unionSDF(sphere, box);
+// distance function of the plane
+// 内積を使う。
+// 例えば画面下に床を描きたいのであれば、nはvec4(0.0, 1.0, 0.0, 1.0)にする
+// 内積でx, zは無視されy軸に対して、レイのy座標がマイナスであれば、内積結果はマイナスになる.
+// それでn.wを足し合わせた結果が0付近になればその集合が描画されるところである。
+float planeSDF(vec3 p, vec4 n) {
+    // n must be normalized
+    return dot(p, n.xyz) + n.w;
+}
+
+
+// distance function of the torus
+// t.xはtorusの中心からどれだけ距離をおいてパイプを作るか
+// t.yはパイプの太さ。この値が大きいとパイプは太くなる。
+// p.xyならz軸方向を向く。p.yzならx軸方向を向く。p.xzならy軸方向を向く
+// rの第一要素では単純に、この場合だとxy平面で円を描くのと同じで円の円周で０を返すようにしている。
+// rで円周上であるならrの第一要素は0だから、最後のreturnではp.zの距離がt.y(パイプの太さ)と同じところで０を返すようになる
+float torusSDF(vec3 p, vec2 t) {
+    vec2 r = vec2(length(p.xy)-t.x, p.z);
+    return length(r) - t.y;
 }
 
 
 
 
+// この関数をdistance_functionのハブとしておくことで、複数オブジェクトを描いたり、重ねて描いたりすることを容易にする。
+float sceneSDF(vec3 samplePoint) {
+    float cylinderRadius = 0.3;
+    float cylinder1 = cylinderSDF( samplePoint, 2.0, cylinderRadius );
+    float cylinder2 = cylinderSDF( rotateX(radians(90.0)) * samplePoint, 2.0, cylinderRadius );
+    float cylinder = smoothMin (cylinder1, cylinder2, 7.0);
+    
+    float floor = planeSDF(samplePoint, vec4(0.0, 0.0, 1.0, .10));
+    
+    return unionSDF(cylinder, floor);
+//    return unionSDF(sphere, box);
+}
 
+// 各オブジェクトが固有のカラーを持てるように変更
+// returnをvec4にしている。んで各オブジェクトにカラー.rgbでセット
+vec4 sceneSDF2(vec3 samplePoint) {
+    float torus = torusSDF(samplePoint, vec2(0.75, 0.25));
+    vec4 t = vec4(vec3(1.0, 1.0, 1.0), torus);
+    return t;
+}
 
 
 
@@ -207,7 +265,7 @@ vec3 rayDirection(float fieldOfView) {
 float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, float end) {
     float depth = start;
     for ( int i = 0; i < MAX_MARCHING_STEPS; i++ ) {
-        float rayPos = sceneSDF( eye + depth * marchingDirection );
+        float rayPos = sceneSDF2( eye + depth * marchingDirection ).w;
         // EPSILONより小さい、つまりオブジェクトの表面だとわかり次第をreturnでdepthを返してループを抜ける
         if ( rayPos < EPSILON ) {
             return depth;
@@ -228,9 +286,9 @@ float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, f
 // SDFの勾配を求めて、各ポイントにおける法線を算出。
 vec3 estimateNormal(vec3 p) {
     return normalize(vec3(
-                          sceneSDF(vec3(p.x + EPSILON, p.y, p.z)) - sceneSDF(vec3(p.x - EPSILON, p.y, p.z)),
-                          sceneSDF(vec3(p.x, p.y + EPSILON, p.z)) - sceneSDF(vec3(p.x, p.y - EPSILON, p.z)),
-                          sceneSDF(vec3(p.x, p.y, p.z + EPSILON)) - sceneSDF(vec3(p.x, p.y, p.z - EPSILON))
+                          sceneSDF2(vec3(p.x + EPSILON, p.y, p.z)).w - sceneSDF2(vec3(p.x - EPSILON, p.y, p.z)).w,
+                          sceneSDF2(vec3(p.x, p.y + EPSILON, p.z)).w - sceneSDF2(vec3(p.x, p.y - EPSILON, p.z)).w,
+                          sceneSDF2(vec3(p.x, p.y, p.z + EPSILON)).w - sceneSDF2(vec3(p.x, p.y, p.z - EPSILON)).w
     ));
 }
 
@@ -299,8 +357,6 @@ mat4 viewMatrix(vec3 eye, vec3 center, vec3 up) {
     );
 }
 
-s
-
 
 void main () {
     // スクリーン座標を上下左右を-1~1にする (左下が-1, -1で右上が1,1)
@@ -310,8 +366,8 @@ void main () {
     vec3 viewDir = rayDirection(45.0);
     // カメラの位置を決める
 //    vec3 eye = vec3(8.0, sin(u_time*0.2)*5.0, 7.0);
-    vec3 eye = vec3(8.0, 5.0, 7.0);
-//    vec3 eye = vec3(0.0, 0.0, 15.0);
+//    vec3 eye = vec3(8.0, 5.0, 7.0);
+    vec3 eye = vec3(0.0, 0.0, 15.0);
     
     // viewMatrixを作る。ここでカメラ中心の座標にする(openGLの行列チュートリアル見ると分かりやすい)
     mat4 viewToWorld = viewMatrix(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
@@ -333,8 +389,8 @@ void main () {
     // 違いはvec3でそのオブジェクトの表面のベクトル情報を取っていること。
     vec3 surfPos = eye + dist * worldDir;
     
-    vec3 K_a = vec3(0.2, 0.7, 0.7);
-    vec3 K_d = vec3(0.2, 0.7, 0.7);
+    vec3 K_a = sceneSDF2(surfPos).rgb;
+    vec3 K_d = sceneSDF2(surfPos).rgb;
     vec3 K_s = vec3(1.0, 1.0, 1.0);
     float shininess = 10.0;
     
