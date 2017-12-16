@@ -213,13 +213,26 @@ float planeSDF(vec3 p, vec4 n) {
 // p.xyならz軸方向を向く。p.yzならx軸方向を向く。p.xzならy軸方向を向く
 // rの第一要素では単純に、この場合だとxy平面で円を描くのと同じで円の円周で０を返すようにしている。
 // rで円周上であるならrの第一要素は0だから、最後のreturnではp.zの距離がt.y(パイプの太さ)と同じところで０を返すようになる
-float torusSDF(vec3 p, vec2 t) {
-    vec2 r = vec2(length(p.xy)-t.x, p.z);
-    return length(r) - t.y;
+float torusSDF(vec3 p, vec2 t ) {
+    vec2 r = vec2( length( p.xy )-t.x, p.z );
+    return length( r ) - t.y;
 }
 
-
-
+// distance function of the cone
+// 少しばかり難しい。
+// returnのところは円柱の描画と全く同じ
+// d1はconeの高さを測っている。
+// d2はmax関数なので、q.yがマイナスつまりy<0で、dotの計算が大きくなれば良い。
+// dotが０に近い値を返すのは、二つのベクトルが90度の角度で離れている時。
+// だからc.xを大きくすれば円錐の円は大きくなり、c.yを大きくすれば円錐は細長くなる。
+float coneSDF( vec3 p, vec3 c ) {
+    vec2 q = vec2( length(p.xz), p.y );
+    float d1 = -q.y - c.z;
+    float d2 = max( dot(q,c.xy), q.y );
+    float insideDistance = min( max(d1,d2), 0.0 );
+    float outsideDistance = length( max(vec2(d1,d2),0.0) );
+    return insideDistance + outsideDistance;
+}
 
 // この関数をdistance_functionのハブとしておくことで、複数オブジェクトを描いたり、重ねて描いたりすることを容易にする。
 float sceneSDF(vec3 samplePoint) {
@@ -229,24 +242,17 @@ float sceneSDF(vec3 samplePoint) {
     float cylinder = smoothMin (cylinder1, cylinder2, 7.0);
     
     float floor = planeSDF(samplePoint, vec4(0.0, 0.0, 1.0, .10));
-    
     return unionSDF(cylinder, floor);
-//    return unionSDF(sphere, box);
 }
 
 // 各オブジェクトが固有のカラーを持てるように変更
 // returnをvec4にしている。んで各オブジェクトにカラー.rgbでセット
 vec4 sceneSDF2(vec3 samplePoint) {
-    float torus = torusSDF(samplePoint, vec2(0.75, 0.25));
-    vec4 t = vec4(vec3(1.0, 1.0, 1.0), torus);
-    return t;
+    float cone = coneSDF(samplePoint, normalize(vec3(abs(sin(u_time)), 0.5, 1.5)));
+    vec4 c = vec4 (vec3(1.0), cone);
+    
+    return c;
 }
-
-
-
-
-
-
 
 // ここでレイを作る。
 // xy方向は単に -u_resolution/2 ~ u_resolution/2 に座標変換したスクリーンのxyを入れる。
@@ -366,7 +372,7 @@ void main () {
     vec3 viewDir = rayDirection(45.0);
     // カメラの位置を決める
 //    vec3 eye = vec3(8.0, sin(u_time*0.2)*5.0, 7.0);
-//    vec3 eye = vec3(8.0, 5.0, 7.0);
+//    vec3 eye = vec3(8.0, 4.0, 5.0);
     vec3 eye = vec3(0.0, 0.0, 15.0);
     
     // viewMatrixを作る。ここでカメラ中心の座標にする(openGLの行列チュートリアル見ると分かりやすい)
