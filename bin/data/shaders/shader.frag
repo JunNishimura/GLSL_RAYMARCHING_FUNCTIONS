@@ -11,6 +11,14 @@ const float MAX_DIST = 100.0; // レイの最大距離
 const float EPSILON = 0.0001; // ０に限りなく近い数
 
 
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------------------------------------------- //
+// function of transformation  //
+// thetaにはradians()を通してから代入する
+
 // x軸で回転
 mat3 rotateX(float theta) {
     float c = cos(theta);
@@ -63,6 +71,15 @@ mat3 rotate(float theta, vec3 axis) {
                  a.z * a.z * r + c
                  );
 }
+
+
+
+
+
+
+
+
+
 
 
 
@@ -203,7 +220,8 @@ float easyCylinderSDF (vec3 p) {
 // それでn.wを足し合わせた結果が0付近になればその集合が描画されるところである。
 float planeSDF(vec3 p, vec4 n) {
     // n must be normalized
-    return dot(p, n.xyz) + n.w;
+    vec3 nn = normalize(n.xyz);
+    return dot(p, nn) + n.w;
 }
 
 
@@ -213,8 +231,9 @@ float planeSDF(vec3 p, vec4 n) {
 // p.xyならz軸方向を向く。p.yzならx軸方向を向く。p.xzならy軸方向を向く
 // rの第一要素では単純に、この場合だとxy平面で円を描くのと同じで円の円周で０を返すようにしている。
 // rで円周上であるならrの第一要素は0だから、最後のreturnではp.zの距離がt.y(パイプの太さ)と同じところで０を返すようになる
-float torusSDF(vec3 p, vec2 t ) {
-    vec2 r = vec2( length( p.xy )-t.x, p.z );
+// 変更：引数 vec3 p -> vec2 base, float up に変更。こうすることで、向きの異なるtorusを作れる。 baseはどの平面をベースとするか。upはどちらを上としてtorusを描くか。やっていることは前と同じで単にバラしただけ。
+float torusSDF(vec2 base, float up, vec2 t ) {
+    vec2 r = vec2( length( base ) - t.x, up );
     return length( r ) - t.y;
 }
 
@@ -248,10 +267,10 @@ float sceneSDF(vec3 samplePoint) {
 // 各オブジェクトが固有のカラーを持てるように変更
 // returnをvec4にしている。んで各オブジェクトにカラー.rgbでセット
 vec4 sceneSDF2(vec3 samplePoint) {
-    float cone = coneSDF(samplePoint, normalize(vec3(abs(sin(u_time)), 0.5, 1.5)));
-    vec4 c = vec4 (vec3(1.0), cone);
+    float pl = planeSDF(samplePoint, vec4(0.0, 1.0, 0.0, 1.0));
+    vec4 tile = vec4(vec3(1.0), pl);
     
-    return c;
+    return tile;
 }
 
 // ここでレイを作る。
@@ -273,6 +292,7 @@ float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, f
     for ( int i = 0; i < MAX_MARCHING_STEPS; i++ ) {
         float rayPos = sceneSDF2( eye + depth * marchingDirection ).w;
         // EPSILONより小さい、つまりオブジェクトの表面だとわかり次第をreturnでdepthを返してループを抜ける
+        // rayPosとdepthは別物。depthは次第に大きくなるけど、rayPosはオブジェクトとの交点に近くなるにつれて小さくなる（だって、オブジェクトとの距離を示す変数だから）
         if ( rayPos < EPSILON ) {
             return depth;
         }
@@ -288,6 +308,33 @@ float shortestDistanceToSurface(vec3 eye, vec3 marchingDirection, float start, f
 }
 
 
+// floatではなくベクトルで返す
+// ちょっぴり面倒なのは、endもベクトルで返さないといけないこと
+vec2 shortestDistanceToSurface2(vec3 eye, vec3 marchingDirection, float start, float end) {
+    // depthをベクトルとして扱う。
+    // 第一要素にはレイの深さ。つまりこの値はどんどん大きくなる
+    // 第二要素はレイの先端位置（オブジェクトとの距離）。objectと交差しないのであれば値は開いていくが、もし交差するのであればどんどんobjectに近づくわけだから、値は小さくなる
+    vec2 depth;
+    vec2 max = vec2(end);
+    depth.x = start;
+    for ( int i = 0; i < MAX_MARCHING_STEPS; i++ ) {
+        depth.y = sceneSDF2( eye + depth.x * marchingDirection ).w;
+        
+        if ( depth.y < EPSILON ) {
+            // ベクトルdepthにまとめることで、レイの深さとobjectとの距離の両方を返せる。
+            // このdepthはEPSILON以下であることを条件として返すわけだから、非常に小さい(極めて０に近い)値を返す
+            return depth;
+        }
+        // レイを進める
+        depth.x += depth.y;
+        // depthが最大距離を超えるとendを返してループを抜ける
+        if ( depth.x >= max.x ) {
+            return max;
+        }
+    }
+    // returnされなかったものに対してもendを返す
+    return max;
+}
 
 // SDFの勾配を求めて、各ポイントにおける法線を算出。
 vec3 estimateNormal(vec3 p) {
@@ -332,7 +379,7 @@ vec3 phongContribForLight(vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 eye, vec
 // alpha : shininess coefficient. この定数が大きいほど、鏡面ハイライトが小さく強くなる
 // p : position of point beging lit
 // eye : position of camera
-vec3 phongillumination(vec3 k_a, vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 eye ) {
+vec3 phongillumination(vec3 k_a, vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 eye, vec2 dist ) {
     const vec3 ambientLight = 0.5 * vec3(1.0, 1.0, 1.0);
     vec3 color = ambientLight * k_a;
     vec3 light1Pos = vec3(4.0*sin(u_time),
@@ -346,6 +393,25 @@ vec3 phongillumination(vec3 k_a, vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 e
                           2.0);
     vec3 light2Intensity = vec3(0.4, 0.4, 0.4);
     color += phongContribForLight(k_d, k_s, alpha, p, eye, light2Pos, light2Intensity);
+    
+    
+    //-------------------------------generating tile-------------------------------------//
+    
+    if ( abs(dist.y) < EPSILON ) {
+        vec3 normal = estimateNormal(p);
+        float diff = clamp(dot(light1Pos, normal)+dot(light2Pos, normal), 0.5, 1.0);
+//        diff += clamp(dot(light2Pos, normal), 0.1, 1.0);
+
+        float u = 1.0 - floor(mod(p.x, 2.0));
+        float v = 1.0 - floor(mod(p.z, 2.0));
+        if (( u == 1.0 && v < 1.0 ) || ( u < 1.0 && v == 1.0 )) {
+            diff *= .5;
+        }
+        color *= diff;
+    }
+    
+    //----------------------------------------------------------------------------------//
+    
     return color;
 }
 
@@ -381,26 +447,27 @@ void main () {
     // 要するにここら辺ではカメラに対応するように座標変換している
     vec3 worldDir = (viewToWorld * vec4(viewDir, 0.0)).xyz;
     
-    float dist = shortestDistanceToSurface( eye, worldDir, MIN_DIST, MAX_DIST );
+    vec2 dist = shortestDistanceToSurface2( eye, worldDir, MIN_DIST, MAX_DIST );
     
     // distではoutsideならMAX_DISTが入る。(shortestDistanceToSurfaceでMAX_DISTが返されている)
     // だからMAX_DISTから小さな値を引いた数より大きい場合は、ピクセルを黒で塗りつぶす。
     // dist >= MAX_DISTでも同じ効果が得られる。
-    if( dist > MAX_DIST - EPSILON ) {
+    if( dist.x > MAX_DIST - EPSILON ) {
         outputColor = vec4(0.0, 0.0, 0.0, 0.0);
         return;
     }
     
     // shortestDistanceToSurface関数でレイを進めていることと同じ。
     // 違いはvec3でそのオブジェクトの表面のベクトル情報を取っていること。
-    vec3 surfPos = eye + dist * worldDir;
+    // surfPosは単にオブジェクトとの交差点の座標を持つベクトルである。
+    vec3 surfPos = eye + dist.x * worldDir;
     
     vec3 K_a = sceneSDF2(surfPos).rgb;
     vec3 K_d = sceneSDF2(surfPos).rgb;
     vec3 K_s = vec3(1.0, 1.0, 1.0);
     float shininess = 10.0;
     
-    vec3 color = phongillumination( K_a, K_d, K_s, shininess, surfPos, eye );
+    vec3 color = phongillumination( K_a, K_d, K_s, shininess, surfPos, eye, dist );
     
     outputColor = vec4(color, 1.0);
 }
