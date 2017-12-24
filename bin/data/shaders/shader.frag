@@ -10,6 +10,9 @@ const float MIN_DIST = 0.0; // レイの最短距離
 const float MAX_DIST = 100.0; // レイの最大距離
 const float EPSILON = 0.0001; // ０に限りなく近い数
 
+const float PI = 3.1415926;
+const int oct = 8;
+const float per = 0.5;
 
 // ------------------------------------------------------------------------------------------------------------------------------------- //
 // ------------------------------------------------------------------------------------------------------------------------------------- //
@@ -23,7 +26,7 @@ const float EPSILON = 0.0001; // ０に限りなく近い数
 // function to create random value
 // 簡単な方法。raymarchingでもpost-processingでの乱数利用であれば、スクリーンに描画するだけだから、引数はvec2型で、スクリーンの正規化された座標をぶち込めばよい。
 float easy_random (vec2 p) {
-    return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453);
+    return fract(sin(dot(p, vec2(12.9898, 4.1414))) * 43758.5453);
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -44,7 +47,7 @@ vec4 night_scope_effect(vec3 color, vec2 st, vec3 effect_color) {
     dest *= vignette;
     
     // ノイズをかける
-    float noise = rnd(st+mod(u_time, 10.0));
+    float noise = easy_random(st+mod(u_time, 10.0));
     dest *= noise * 0.5 + 0.5;
     
     // 走査線を走らせる
@@ -145,11 +148,11 @@ vec4 mizutama (vec2 st) {
     
     // １行おきにエフェクト変えたい場合はここら辺をいじくる
     if (mod(st.x*5.0, 2.0) >= 1.0) {
-        float v = clamp(cos(u_time) - length(mod_st), 0.0, 1.0);
+        float v = clamp(abs(cos(u_time)) - length(mod_st), 0.0, 1.0);
         float vv = smoothstep(0.5, 0.55, v);
         color = vec4(vec3(vv), 1.0);
     } else {
-        float v = clamp(sin(u_time) - length(mod_st), 0.0, 1.0);
+        float v = clamp(abs(sin(u_time)) - length(mod_st), 0.0, 1.0);
         float vv = smoothstep(0.5, 0.55, v);
         color = vec4(vec3(vv), 1.0);
     }
@@ -669,4 +672,8 @@ void main () {
     vec3 color = phongillumination( K_a, K_d, K_s, shininess, surfPos, eye, dist );
     
     outputColor = vec4(color, 1.0);
+    
+    // from here you can try some post-effects
+    outputColor *= odd_Row_Effect(vec3(1., 0., 0.));
+    outputColor *= mizutama(st);
 }
