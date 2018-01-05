@@ -6,7 +6,7 @@ uniform vec2 u_resolution;
 out vec4 outputColor;
 
 const int MAX_MARCHING_STEPS = 255; // ループ回数。この回数分レイを進める
-const float MIN_DIST = 0.0; // レイの最短距離
+const float MIN_DIST = 0.0; // レイの最短距離 // レイの初期位置
 const float MAX_DIST = 100.0; // レイの最大距離
 const float EPSILON = 0.0001; // ０に限りなく近い数
 
@@ -39,11 +39,16 @@ vec4 white_noise_effect(float rand) {
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 // function of night scope effect
 vec4 night_scope_effect(vec3 color, vec2 st, vec3 effect_color) {
+    
+//    vec2 p = st * 2.0 - 1.0;
+    
     // colorの平均値
     float dest = (color.r + color.b + color.g) / 3.0;
     
     // 四隅が暗くなるように
-    float vignette = 1.5 - length(st);
+    float vignette = sin(u_time) - length(st);
+    // stにmodを掛けて複製している場合は、少し変更する必要あり。それでも動作がおかしい。
+    // float vignette = 1.0 - length(st*2.0);
     dest *= vignette;
     
     // ノイズをかける
@@ -52,7 +57,7 @@ vec4 night_scope_effect(vec3 color, vec2 st, vec3 effect_color) {
     
     // 走査線を走らせる
     // st.yだから横線が走る。st.y*20で振動数を増やしているから、かける量を小さくすると、線の間隔が大きくなる
-    float scanLine = abs(sin(st.y * 20.0 + u_time * 25.0)) * 0.5 + 0.75;
+    float scanLine = abs(sin(st.y * 50.0 + u_time * 25.0)) * 0.5 + 0.75;
     dest *= scanLine;
     
     // effect_colorはお好みで好きな色を入れる
@@ -280,7 +285,7 @@ vec4 intersectSDF2(vec4 d1, vec4 d2) {
 
 // .wで距離だけを比べて、値が大きい方のベクトルを返す
 vec4 differenceSDF2(vec4 d1, vec4 d2) {
-    return d1.w > -d2.w ? d1 : d2;
+    return d1.w > -d2.w ? d1 : vec4(d2.rgb, -d2.w);
 }
 
 // 距離の部分だけsmoothMinを適用。何か他にもやり方あるような気もする
@@ -399,10 +404,31 @@ float coneSDF( vec3 p, vec3 c ) {
     return insideDistance + outsideDistance;
 }
 
+// distance function of the circle
+// 単に円柱を押しつぶしただけだから、円柱と全く同じアルゴリズム。
+float circleSDF( vec3 p, float d ) {
+    float d1 = length(p.xy) - d;
+    float d2 = abs(p.z) - .001;
+    float inside = min(max(d1, d2), 0.0);
+    float outside = length(max(vec2(d1, d2), 0.0));
+    return inside + outside;
+}
+
+// distance function of the rectangle
+// 単に四角形を描く。これもcubeを潰しただけだから、アルゴリズムはcubeと同じ。
+float rectangleSDF( vec3 p, vec2 rectSize) {
+    vec2 d1 = abs(p.xy) - rectSize;
+    float d2 = abs(p.z) - 0.001;
+    float inside = min(max(d2, max(d1.x, d1.y)), 0.0);
+    float outside = length(max(vec3(d1, d2), 0.0));
+    return inside + outside;
+}
+
+
 // この関数をdistance_functionのハブとしておくことで、複数オブジェクトを描いたり、重ねて描いたりすることを容易にする。
 float sceneSDF(vec3 samplePoint) {
     float cylinderRadius = 0.3;
-    float cylinder1 = cylinderSDF( samplePoint, 2.0, cylinderRadius );
+    float cylinder1 = cylinderSDF( samplePoint, .50, cylinderRadius );
     float cylinder2 = cylinderSDF( rotateX(radians(90.0)) * samplePoint, 2.0, cylinderRadius );
     float cylinder = smoothMin (cylinder1, cylinder2, 7.0);
     
@@ -413,15 +439,20 @@ float sceneSDF(vec3 samplePoint) {
 // 各オブジェクトが固有のカラーを持てるように変更
 // returnをvec4にしている。んで各オブジェクトにカラー.rgbでセット
 vec4 sceneSDF2(vec3 samplePoint) {
-    float pl = planeSDF(samplePoint, vec4(0.0, 1.0, 0.0, 1.0));
-    vec4 tile = vec4(vec3(1.0), pl);
     
-    float tr = torusSDF(samplePoint.xz, samplePoint.y, vec2(0.75, 0.25));
-    vec4 torus = vec4(vec3(1.0), tr);
+    vec3 pos_sp = samplePoint;
+    float sp = sphereSDF(pos_sp, 1.0);
+    vec4 sphere = vec4(vec3(0.0), sp);
+    
+    vec3 pos_c = samplePoint;
+    float c = cylinderSDF(pos_c, 2.5, 0.5);
+    vec4 cylinder = vec4(vec3(1.0, 0., 0.), c);
     
     
-    return unionSDF2(tile, torus);
+    
+    return differenceSDF2(sphere, cylinder);
 }
+
 
 
 // ------------------------------------------------------------------------------------------------------------------------------------- //
@@ -438,6 +469,11 @@ vec3 rayDirection(float fieldOfView) {
     vec2 xy = gl_FragCoord.xy - u_resolution / 2.0;
     float z = u_resolution.y / tan(radians(fieldOfView)/2.0);
     return normalize(vec3(xy, -z));
+}
+
+vec3 rayDirection2(vec2 xy, float fieldOfView) {
+    float fov = fieldOfView * (PI / 180.0);
+    return normalize(vec3(sin(fov)*xy.x, sin(fov)*xy.y, -cos(fov)));
 }
 
 // ここでレイを実際に飛ばしてオブジェクトまでの距離を測る。
@@ -582,24 +618,21 @@ vec3 phongillumination(vec3 k_a, vec3 k_d, vec3 k_s, float alpha, vec3 p, vec3 e
     //-------------------------------generating tile-------------------------------------//
     //------------------------------generating shadow------------------------------------//
     
-    if ( abs(dist.y) < EPSILON ) {
-        vec3 normal = estimateNormal(p);
-        float diff = clamp(dot(light1Pos, normal), 0.5, 1.0);
-        
-        shadow = genShadow(p + normal*0.001, light1Pos);
-
-        float u = 1.0 - floor(mod(p.x, 2.0));
-        float v = 1.0 - floor(mod(p.z, 2.0));
-        if (( u == 1.0 && v < 1.0 ) || ( u < 1.0 && v == 1.0 )) {
-            diff *= .5;
-        }
-        color = vec3(1.0)*diff;
-    }
+//    if ( abs(dist.y) < EPSILON ) {
+//        vec3 normal = estimateNormal(p);
+//        float diff = clamp(dot(light1Pos, normal), 0.5, 1.0);
+//
+//        shadow = genShadow(p + normal*0.001, light1Pos);
+//
+//        float u = 1.0 - floor(mod(p.x, 2.0));
+//        float v = 1.0 - floor(mod(p.z, 2.0));
+//        if (( u == 1.0 && v < 1.0 ) || ( u < 1.0 && v == 1.0 )) {
+//            diff *= .5;
+//        }
+//        color = vec3(1.0)*diff;
+//    }
     
     //----------------------------------------------------------------------------------//
-    
-    
-    
     
     return color * max(shadow, 0.5);
 }
@@ -636,12 +669,29 @@ void main () {
     // スクリーン座標を上下左右を-1~1にする (左下が-1, -1で右上が1,1)
     vec2 st = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
     
+    // modで複製するなら
+//    st = mod(st*2.0, 1.0)-0.5;
+    
+    // make uv coordinate
+    // -1~1のuv座標を作る
+//    vec2 uv = (gl_FragCoord.xy * 2.0 - u_resolution.xy) / min(u_resolution.x, u_resolution.y);
+//    if (uv.y != 0.0) {
+//        uv.x /= abs(uv.y*2.0);
+//    }
+//    uv.y = abs(uv.y);
+////    uv.x += u_time;
+//    uv = mod(uv*5.0, 1.0)-0.5;
+    
+    
     // fieldOfViewの角度を渡してレイを作成
     vec3 viewDir = rayDirection(45.0);
+//    vec3 viewDir = rayDirection2(st, 45.0);
+    
     // カメラの位置を決める
 //    vec3 eye = vec3(8.0, sin(u_time*0.2)*5.0, 7.0);
 //    vec3 eye = vec3(8.0, 4.0, 5.0);
-    vec3 eye = vec3(0.0, 5.0, 10.0);
+    vec3 eye = vec3(cos(u_time)*10.0, 4.0, sin(u_time)*10.0);
+//    vec3 eye = vec3(0.0, 0.0, 10.0);
     
     // viewMatrixを作る。ここでカメラ中心の座標にする(openGLの行列チュートリアル見ると分かりやすい)
     mat4 viewToWorld = viewMatrix(eye, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
@@ -651,13 +701,6 @@ void main () {
     
     vec2 dist = shortestDistanceToSurface2( eye, worldDir, MIN_DIST, MAX_DIST );
     
-    // distではoutsideならMAX_DISTが入る。(shortestDistanceToSurfaceでMAX_DISTが返されている)
-    // だからMAX_DISTから小さな値を引いた数より大きい場合は、ピクセルを黒で塗りつぶす。
-    // dist >= MAX_DISTでも同じ効果が得られる。
-    if( dist.x > MAX_DIST - EPSILON ) {
-        outputColor = vec4(0.0, 0.0, 0.0, 0.0);
-        return;
-    }
     
     // shortestDistanceToSurface関数でレイを進めていることと同じ。
     // 違いはvec3でそのオブジェクトの表面のベクトル情報を取っていること。
@@ -671,9 +714,28 @@ void main () {
     
     vec3 color = phongillumination( K_a, K_d, K_s, shininess, surfPos, eye, dist );
     
+    
+    // distではoutsideならMAX_DISTが入る。(shortestDistanceToSurfaceでMAX_DISTが返されている)
+    // だからMAX_DISTから小さな値を引いた数より大きい場合は、ピクセルを黒で塗りつぶす。
+    // dist >= MAX_DISTでも同じ効果が得られる。
+    if( dist.x > MAX_DIST - EPSILON ) {
+        outputColor = vec4(1.0);
+        
+        // post-effectをかけたい時、スクリーン全体にpost-effectをかけたい。
+        // そうするために、レイが衝突していない領域でもpost-effectをかける必要あり。
+        // 衝突していない領域をvec4(0.0)とするなら、addする。
+        // 衝突していない領域をvec4(1.0)とするなら、multiplyする。
+//        outputColor *= night_scope_effect(color, st, vec3(0.9, 0.9, 0.7));
+//        outputColor *= white_noise_effect(easy_random(st+u_time));
+//        outputColor *= odd_Row_Effect(vec3(1., 0., 0.));
+        return;
+    }
+    
     outputColor = vec4(color, 1.0);
     
     // from here you can try some post-effects
-    outputColor *= odd_Row_Effect(vec3(1., 0., 0.));
-    outputColor *= mizutama(st);
+//    outputColor *= night_scope_effect(color, st, vec3(0.9, 0.9, 0.7));
+//    outputColor *= odd_Row_Effect(vec3(1., 0., 0.));
+//    outputColor *= mizutama(st);
+    
 }
